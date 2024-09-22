@@ -7,4 +7,4 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++")
 set(CMAKE_C_COMPILER "/opt/homebrew/opt/llvm/bin/clang")
 
-add_executable(a main.cpp)
+add_executable(test_smart_pointer main.cpp SmartPtr.hpp)
