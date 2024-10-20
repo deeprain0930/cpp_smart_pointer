@@ -1,6 +1,8 @@
+#include <memory>
 #include <type_traits>
 #include <iostream>
 #include <typeinfo>
+#include <atomic>
 
 #define DEEPRAIN_DEBUG_ 1
 
@@ -181,7 +183,240 @@ namespace deeprain {
         return UniquePtr<T>(new std::remove_extent_t<T>[len]()); 
     }
 
+    template<typename T> 
+    struct CompressedPairElement {
+        T elem_;
+    };
+
+    // shared内存块，仅有shared共享计数
+    struct __ControlBlock {
+        std::atomic<long> shared_owners_;       // shared共享计数
+
+        __ControlBlock(long ref = 0) : shared_owners_(ref) {}
+
+        // 新增引用计数
+        void add_shared() {
+            shared_owners_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // 减少共享计数
+        bool release_shared() {
+            if(shared_owners_.fetch_sub(1, std::memory_order_relaxed) == 0) {
+                on_zero_shared();
+
+                return true;
+            }
+
+            return false;
+        }
+
+        // 返回引用计数
+        long use_count()
+        {
+            return shared_owners_.load(std::memory_order_relaxed);
+        }
+
+        // 引用计数清零调用
+        virtual void on_zero_shared() = 0;
+    };
+
+    // weak内存块，仅有weak计数
+    struct __ControlBlockWeak : public __ControlBlock {
+        std::atomic<long> shared_weak_owners_;   // weak指针计数
+        
+        // 新增共享计数
+        void add_shared() {
+            __ControlBlock::add_shared();
+        }
+
+        // 新增weak计数
+        void add_weak() {
+            shared_weak_owners_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // 减少共享计数
+        void release_shared() {
+            if(__ControlBlock::release_shared()) {
+                release_weak();   
+            }
+        }
+
+        // 减少weak计数
+        void release_weak() {
+            if(shared_weak_owners_.fetch_sub(1, std::memory_order_relaxed) == 0) {
+                on_zero_weak();
+            }
+        }
+
+        // 引用计数
+        long use_count()
+        {
+            return __ControlBlock::use_count();
+        }
+
+        // weak用，加锁
+        __ControlBlockWeak* lock()
+        {
+            // 自旋锁
+            long current_shared_cnt = shared_owners_.load();
+            while(current_shared_cnt != -1) {
+                if(shared_owners_.compare_exchange_weak(current_shared_cnt, current_shared_cnt + 1))
+                {
+                    return this;
+                }
+            }
+
+            return nullptr;
+        }
+
+        virtual void* get_deleter(const std::type_info&) const {
+            return nullptr;
+        }
+
+        // weak计数清零
+        virtual void on_zero_weak() = 0;
+    };
+
+    // 对象new构造方式所有控制块
+    template <typename T, typename Deleter>
+    struct __ControlBlockShared : public __ControlBlockWeak {
+        Deleter deleter_;
+        T* ptr_;
+
+        virtual void* get_deleter(const std::type_info& info) const override;
+
+        virtual void on_zero_shared() override
+        {
+            deleter_(ptr_);
+            deleter_.~Deleter();
+        }
+
+        virtual void on_zero_weak() override
+        {
+            return;
+        }
+    };
+
+    template <typename T, typename Deleter>
+    void * __ControlBlockShared<T, Deleter>::get_deleter(const std::type_info& info) const {
+        return typeid(Deleter) == info ? std::addressof(deleter_) : nullptr;
+    }
+
+    // make原地构造所用的控制块
+    template <typename T>
+    struct __ControlBlockInPlace : public __ControlBlockShared<T, DefaultDeleter<T>>{
+
+        using _compressed_element = CompressedPairElement<T>;
+        struct alignas(_compressed_element) _Storage {
+            char storage_[sizeof(_compressed_element)];
+        };
+
+        _Storage storage_;
+    };
+
+    template <typename T>
     struct SharedPtr {
+        using element_type = std::remove_extent_t<T>;
+    private:
+        element_type* ptr_element_;
+        __ControlBlockWeak* ptr_control_block_;
+
+    public:
+        SharedPtr(std::nullptr_t) noexcept : T(nullptr), ptr_control_block_(nullptr) {};
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        SharedPtr(Y* ptr) : ptr_element_(ptr)
+        {
+            using _ControlBlock = __ControlBlockShared<Y, DefaultDeleter<Y>>;
+            // 先创建一个智能指针，防止new的时候抛出异常，内存没有被释放
+            try {
+            UniquePtr<Y> hold(ptr);
+            ptr_control_block_ = new _ControlBlock(ptr_element_, DefaultDeleter<Y>()); 
+            hold.release();
+            }
+            catch(...) {}
+        }
+
+        template <typename Y, typename YDeleter>
+        requires std::is_convertible_v<Y, T>
+        SharedPtr(Y* ptr, const YDeleter& deleter) : ptr_element_(ptr)
+        {
+            using _ControlBlock = __ControlBlockShared<Y, YDeleter>;
+            try {
+                ptr_control_block_ = new _ControlBlock(ptr_element_, deleter); 
+            }
+            catch(...) {}
+        }
+
+        ~SharedPtr()
+        {
+            if(ptr_control_block_)
+            {
+                ptr_control_block_->release_shared();
+            }
+        }
+        // make_shared使用已有控制块构造
+        template <typename Y, typename CntrlBlk>
+        static std::shared_ptr<T> CreateWithControlBlock(Y* ptr_in, CntrlBlk* control_block) {
+            
+        };
+    public:
+        void reset()
+        {
+            SharedPtr().swap(*this);
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        void reset(Y* ptr)
+        {
+            SharedPtr(ptr).swap(*this);
+        }
+
+        template <typename Y, typename Deleter>
+        void reset(Y* ptr, Deleter d)
+        {
+            SharedPtr(ptr, d).swap(*this);
+        }
+
+        // 交换
+        void swap(SharedPtr& other)
+        {
+            std::swap(ptr_element_, other.ptr_element_);
+            std::swap(ptr_control_block_, other.ptr_control_block_);
+        }
+
+        // 获取裸指针
+        element_type* get() const
+        {
+            return ptr_element_;
+        }
+
+        // 解引用
+        element_type& operator*() {
+            return *ptr_element_;
+        }
+
+        // 指针操作符
+        element_type* operator->()
+        {
+            return ptr_element_;
+        }
+        
+    };
+
+    template <typename T>
+    struct WeakPtr {
 
     };
+
+    template <typename T>
+    struct EnableSharedFromThis {
+
+    };
+
+    template <typename T>
+    SharedPtr<T> make_shared()
+    {};
 }
