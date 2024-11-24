@@ -1,0 +1,18 @@
+{
+	"bmi-installation" : null,
+	"compiler-frontend-variant" : "GNU",
+	"compiler-id" : "Clang",
+	"compiler-simulate-id" : "",
+	"config" : "Debug",
+	"cxx-modules" : {},
+	"dir-cur-bld" : "/Users/deeprain0930/practice/cpp/smart_pointer/build",
+	"dir-cur-src" : "/Users/deeprain0930/practice/cpp/smart_pointer",
+	"dir-top-bld" : "/Users/deeprain0930/practice/cpp/smart_pointer/build",
+	"dir-top-src" : "/Users/deeprain0930/practice/cpp/smart_pointer",
+	"exports" : [],
+	"forward-modules-from-target-dirs" : [],
+	"include-dirs" : [],
+	"language" : "CXX",
+	"linked-target-dirs" : [],
+	"module-dir" : "/Users/deeprain0930/practice/cpp/smart_pointer/build/CMakeFiles/test_smart_pointer.dir"
+}

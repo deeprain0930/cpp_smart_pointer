@@ -1,8 +1,10 @@
+#include <cstddef>
 #include <memory>
 #include <type_traits>
 #include <iostream>
 #include <typeinfo>
 #include <atomic>
+#include <alloca.h>
 
 #define DEEPRAIN_DEBUG_ 1
 
@@ -81,6 +83,7 @@ namespace deeprain {
 
             if(&that == this)
                 return *this;
+
             ptr_ = that.ptr_;
             deleter_ = that.deleter_;
             that.ptr_ = nullptr;
@@ -249,8 +252,7 @@ namespace deeprain {
         }
 
         // 引用计数
-        long use_count()
-        {
+        long use_count() {
             return __ControlBlock::use_count();
         }
 
@@ -281,13 +283,13 @@ namespace deeprain {
     template <typename T, typename Deleter>
     struct __ControlBlockShared : public __ControlBlockWeak {
         Deleter deleter_;
-        T* ptr_;
+        T* element_ptr_;
 
         virtual void* get_deleter(const std::type_info& info) const override;
 
         virtual void on_zero_shared() override
         {
-            deleter_(ptr_);
+            deleter_(element_ptr_);
             deleter_.~Deleter();
         }
 
@@ -315,7 +317,12 @@ namespace deeprain {
     };
 
     template <typename T>
+    class WeakPtr;
+
+    template <typename T>
     struct SharedPtr {
+        template <typename U>
+        friend class WeakPtr;
         using element_type = std::remove_extent_t<T>;
     private:
         element_type* ptr_element_;
@@ -358,8 +365,12 @@ namespace deeprain {
         }
         // make_shared使用已有控制块构造
         template <typename Y, typename CntrlBlk>
-        static std::shared_ptr<T> CreateWithControlBlock(Y* ptr_in, CntrlBlk* control_block) {
-            
+        static std::shared_ptr<T> CreateWithControlBlock(Y* ptr_in, CntrlBlk* ptr_control_block) {
+            SharedPtr<T> r;
+            r.ptr_element_  = ptr_in;
+            r.ptr_control_block_ = ptr_control_block;
+
+            return r;
         };
     public:
         void reset()
@@ -408,7 +419,131 @@ namespace deeprain {
 
     template <typename T>
     struct WeakPtr {
+        using element_type = std::remove_extent_t<T>;
+        template <typename U>
+        friend class SharedPtr;
+    private:
+        element_type* ptr_element_;
+        __ControlBlockWeak* ptr_control_block_;
+    public:
+        WeakPtr() noexcept
+            : ptr_element_(nullptr)
+            , ptr_control_block_(nullptr)
+        {}
 
+        WeakPtr(const WeakPtr& r) 
+            : ptr_element_(r.ptr_element_)
+            , ptr_control_block_(r.ptr_control_block_) {
+            if(ptr_control_block_) {
+                ptr_control_block_->add_weak();
+            }
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr(const WeakPtr<Y>& r) noexcept 
+            : ptr_element_(nullptr)
+            , ptr_control_block_(nullptr) {
+            SharedPtr<Y> s = r.lock();
+            *this = WeakPtr<T>(s);
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr(const SharedPtr<Y>& r) noexcept
+            : ptr_element_(r.ptr_element_)
+            , ptr_control_block_(r.ptr_control_block_) {
+            if(ptr_control_block_) {
+                ptr_control_block_->add_weak();
+            } 
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr(WeakPtr<Y>&& r) noexcept 
+            : ptr_element_(nullptr)
+            , ptr_control_block_(nullptr) {
+            SharedPtr<Y> s = r.lock();
+            *this = WeakPtr<T>(s);
+            s.reset();
+        }
+
+        ~WeakPtr() {
+            if(ptr_control_block_) {
+                ptr_control_block_->release_weak();
+            }
+        }
+
+        WeakPtr& operator=(const WeakPtr& r) noexcept {
+            WeakPtr(r).swap(*this);
+
+            return *this;
+        }
+
+        WeakPtr& operator=(WeakPtr&& r) noexcept {
+            WeakPtr(std::move(r)).swap(*this);
+
+            return *this;
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr& operator=(const WeakPtr<Y>& r) noexcept {
+            WeakPtr(r).swap(*this);
+
+            return *this;
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr& operator=(const SharedPtr<Y>& r) noexcept {
+            WeakPtr(r).swap(*this);
+
+            return *this;
+        }
+
+        template <typename Y>
+        requires std::is_convertible_v<Y, T>
+        WeakPtr& operator=(WeakPtr<Y>&& r) noexcept {
+            WeakPtr(std::move(r)).swap(*this);
+
+            return *this;
+        }
+
+        // 释放所有权
+        void reset() noexcept
+        {
+            WeakPtr().swap(*this);
+        }
+
+        // 交换
+        void swap(WeakPtr& r) {
+            std::swap(ptr_element_, r.ptr_element_);
+            std::swap(ptr_control_block_, r.ptr_control_block_);
+        }
+
+        // 返回共享所有权的SharedPtr的数量
+        long use_count() const noexcept {
+            return ptr_control_block_ == nullptr ? 
+                0 : ptr_control_block_->use_count();
+        }
+
+        // 等价于use_count == 0
+        bool expired() const noexcept {
+            return use_count() == 0 || ptr_control_block_ == nullptr;
+        }
+
+        // 创建对应的SharedPtr
+        // 若当前无管理对象，返回空(expired=true)
+        SharedPtr<T> lock() const noexcept {
+            SharedPtr<T> r;
+            r.ptr_control_block_ = ptr_control_block_ ? ptr_control_block_->lock() : ptr_control_block_;
+            if(r.ptr_control_block_) {
+                r.ptr_element_ = ptr_element_;
+            }
+
+            return r;
+        }
     };
 
     template <typename T>
@@ -417,6 +552,13 @@ namespace deeprain {
     };
 
     template <typename T>
-    SharedPtr<T> make_shared()
-    {};
+    SharedPtr<T> make_shared() {
+        using __ControlBlock = __ControlBlockInPlace<T>;
+        using __ControlBlockAllocator = std::allocator<__ControlBlock>;
+        __ControlBlockAllocator alloc;
+        auto ptr_alloc_memory = alloc.allocate(1);
+        auto ptr_control_block = new ((void*)ptr_alloc_memory) __ControlBlock;
+        
+        return SharedPtr<T>::CreateWithControlBlock(ptr_control_block->element_ptr_, std::addressof(*ptr_control_block));
+    };
 }

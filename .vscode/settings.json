@@ -1,0 +1,11 @@
+{
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "clangd.arguments": [
+        "-background-index",
+        "-compile-commands-dir=${workspaceFolder}/build"
+    ],
+    "clangd.fallbackFlags": [
+          "-std=c++20",
+          "-I/opt/homebrew/opt/llvm/include/c++/v1"
+    ]
+}

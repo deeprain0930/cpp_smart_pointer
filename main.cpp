@@ -20,8 +20,12 @@ struct Student {
     }
 };
 
+struct alignas(Student) TestClass{};
+
 int main()
 {
+    std::shared_ptr<Student> ps = nullptr;
+    auto ps1 = std::make_shared<Student>();
     deeprain::UniquePtr<Student> ptr_student_1 = deeprain::make_unique<Student>(27, "deeprain");
     ptr_student_1->Print();
 
