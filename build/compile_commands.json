@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/Users/deeprain0930/practice/cpp/smart_pointer/build",
-  "command": "/opt/homebrew/opt/llvm/bin/clang++ -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.0.sdk -mmacosx-version-min=14.5 @CMakeFiles/test_smart_pointer.dir/main.cpp.o.modmap -o CMakeFiles/test_smart_pointer.dir/main.cpp.o -c /Users/deeprain0930/practice/cpp/smart_pointer/main.cpp",
-  "file": "/Users/deeprain0930/practice/cpp/smart_pointer/main.cpp",
-  "output": "CMakeFiles/test_smart_pointer.dir/main.cpp.o"
-}
-]
