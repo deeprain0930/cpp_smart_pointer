@@ -271,7 +271,7 @@ namespace deeprain {
             return nullptr;
         }
 
-        virtual void* get_deleter(const std::type_info&) const {
+        virtual const void* get_deleter(const std::type_info&) const {
             return nullptr;
         }
 
@@ -285,7 +285,7 @@ namespace deeprain {
         Deleter deleter_;
         T* element_ptr_;
 
-        virtual void* get_deleter(const std::type_info& info) const override;
+        virtual const void* get_deleter(const std::type_info& info) const override;
 
         virtual void on_zero_shared() override
         {
@@ -300,7 +300,7 @@ namespace deeprain {
     };
 
     template <typename T, typename Deleter>
-    void * __ControlBlockShared<T, Deleter>::get_deleter(const std::type_info& info) const {
+    const void * __ControlBlockShared<T, Deleter>::get_deleter(const std::type_info& info) const {
         return typeid(Deleter) == info ? std::addressof(deleter_) : nullptr;
     }
 
@@ -320,6 +320,25 @@ namespace deeprain {
     class WeakPtr;
 
     template <typename T>
+    class SharedPtr;
+
+    template <typename T>
+    struct EnableSharedFromThis {
+        friend class SharedPtr<T>;
+    private:
+        WeakPtr<T> weak_this_;
+    protected:
+        EnableSharedFromThis() {}
+        EnableSharedFromThis(const EnableSharedFromThis&) {};
+        EnableSharedFromThis& operator=(const EnableSharedFromThis&) { return *this; };
+    public:
+        ~EnableSharedFromThis() {}
+        SharedPtr<T> shared_from_this() {
+            return SharedPtr<T>(weak_this_);
+        }
+    };
+
+    template <typename T>
     struct SharedPtr {
         template <typename U>
         friend class WeakPtr;
@@ -329,7 +348,8 @@ namespace deeprain {
         __ControlBlockWeak* ptr_control_block_;
 
     public:
-        SharedPtr(std::nullptr_t) noexcept : T(nullptr), ptr_control_block_(nullptr) {};
+        SharedPtr() noexcept: ptr_element_(nullptr), ptr_control_block_(nullptr) {};
+        SharedPtr(std::nullptr_t) noexcept : ptr_element_(nullptr), ptr_control_block_(nullptr) {};
 
         template <typename Y>
         requires std::is_convertible_v<Y, T>
@@ -340,6 +360,7 @@ namespace deeprain {
             try {
             UniquePtr<Y> hold(ptr);
             ptr_control_block_ = new _ControlBlock(ptr_element_, DefaultDeleter<Y>()); 
+            __enable_weak_this(ptr_element_, ptr_element_);
             hold.release();
             }
             catch(...) {}
@@ -352,6 +373,7 @@ namespace deeprain {
             using _ControlBlock = __ControlBlockShared<Y, YDeleter>;
             try {
                 ptr_control_block_ = new _ControlBlock(ptr_element_, deleter); 
+                __enable_weak_this(ptr_element_, ptr_element_);
             }
             catch(...) {}
         }
@@ -365,7 +387,7 @@ namespace deeprain {
         }
         // make_shared使用已有控制块构造
         template <typename Y, typename CntrlBlk>
-        static std::shared_ptr<T> CreateWithControlBlock(Y* ptr_in, CntrlBlk* ptr_control_block) {
+        static SharedPtr<T> CreateWithControlBlock(Y* ptr_in, CntrlBlk* ptr_control_block) {
             SharedPtr<T> r;
             r.ptr_element_  = ptr_in;
             r.ptr_control_block_ = ptr_control_block;
@@ -414,7 +436,18 @@ namespace deeprain {
         {
             return ptr_element_;
         }
-        
+
+        template <typename Yp, typename OrigPtr>
+        requires std::is_convertible_v<OrigPtr, EnableSharedFromThis<Yp>>
+        void __enable_weak_this(const EnableSharedFromThis<Yp>* e, OrigPtr* ptr) noexcept
+        {
+            if(e && e->weak_this->expired())
+            {
+                e->weak_this_ = SharedPtr<Yp>(*this, ptr);
+            }
+        };
+
+        void __enable_weak_this(...) noexcept {};
     };
 
     template <typename T>
@@ -544,12 +577,11 @@ namespace deeprain {
 
             return r;
         }
-    };
 
-    template <typename T>
-    struct EnableSharedFromThis {
 
     };
+
+
 
     template <typename T>
     SharedPtr<T> make_shared() {
